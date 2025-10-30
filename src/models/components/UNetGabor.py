@@ -5,7 +5,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchsummary import summary
 
-from models.components.ResUNet import ResUNet
 from models.components.UNet import UNet
 
 import torch
@@ -75,57 +74,62 @@ class GaborConvLayer(nn.Module):
         # Apply the convolution
         return self.conv(x)
 
-class MultiTaskDirMapEnh(nn.Module):
+class UNetGabor(nn.Module):
     def __init__(self, in_ch=1, out_ch=90, ndim=2, chs: tuple[int, ...] = (64, 128, 256, 512, 1024)):
-        super(MultiTaskDirMapEnh, self).__init__()
+        super(UNetGabor, self).__init__()
         
         self.dirmap_net = UNet(in_ch=1, out_ch=90, ndim=ndim, chs=chs)
-        self.enhancer_net = ResUNet(in_ch=1, out_ch=2, ndim=ndim)
 
         self.gabor_layer = GaborConvLayer(
             num_orientations=90, 
-            ksize=31, 
-            sigma=4.0, 
-            lambd=10.0
+            ksize=25, 
+            sigma=4.5, 
+            lambd=8.0
         )
 
     def forward(self, x):
-        
-        # enh_input = torch.concat([out_dirmap, x], axis=1)
-        # out_enh = self.enhancer_net(x)
-        # out_dirmap = self.dirmap_net(x)
-
-
+    
         # --- Step 1: Get orientation map from U-Net ---
-        # orientation_map shape: (B, 90, H, W)
+        # out_dirmap shape: (B, C, H, W), where C is the number of orientations
         out_dirmap = self.dirmap_net(x)
+
+        # --- Create a hard mask from the orientation map ---
+        # Find the index of the maximum value for each pixel along the channel dimension.
+        # max_indices shape: (B, H, W)
+        max_indices = torch.argmax(out_dirmap, dim=1)
         
-        # Apply softmax to get probabilities for each orientation at each pixel
-        orientation_probs = torch.softmax(out_dirmap, dim=1)
+        # Create a one-hot encoded tensor from the indices. This produces a tensor
+        # of shape (B, H, W, C), where the last dimension is the one-hot vector.
+        hard_mask = F.one_hot(max_indices, num_classes=out_dirmap.shape[1])
+        
+        # Permute dimensions to (B, C, H, W) to match the gabor_responses shape
+        # and cast to float for multiplication.
+        hard_mask = hard_mask.permute(0, 3, 1, 2).float()
+
+        hard_mask_upscaled = F.interpolate(hard_mask, scale_factor=8, mode="nearest")
 
         # --- Step 2: Get Gabor filter responses ---
-        # gabor_responses shape: (B, 90, H, W)
+        # gabor_responses shape: (B, C, H, W)
         gabor_responses = self.gabor_layer(x)
         
-        # --- Step 3: Weight Gabor responses by orientation probabilities ---
-        # Element-wise multiplication
-        weighted_responses = orientation_probs * gabor_responses
+        # --- Step 3: Weight Gabor responses by the hard mask ---
+        # Element-wise multiplication. For each pixel, only the Gabor response
+        # corresponding to the max orientation score will be kept. All others will be zero.
+        weighted_responses = hard_mask_upscaled * gabor_responses
         
-        # --- Step 4: Sum the weighted responses to get a single feature map ---
-        # Sum across the 90 channels
-        # combined_feature_map shape: (B, 1, H, W)
-        combined_feature_map = torch.sum(weighted_responses, dim=1, keepdim=True)
+        # --- Step 4: Sum the weighted responses ---
+        # Summing across the channel dimension effectively selects the single non-zero
+        # Gabor response for each pixel, creating the final enhanced feature map.
+        # out_enh shape: (B, 1, H, W)
+        out_enh = torch.sum(weighted_responses, dim=1, keepdim=True)
         
-        # --- Step 5: Feed the enhanced map to the segmentation network ---
-        out_enh = self.enhancer_net(combined_feature_map)
-
         return out_dirmap, out_enh
 
 
 
 
 if __name__ == '__main__':
-    model         =  MultiTaskDirMapEnh()
+    model         =  UNetGabor()
 
     device        = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model         = model.to(device)

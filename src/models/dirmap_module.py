@@ -233,150 +233,226 @@ class EnhancerLitModule(LightningModule):
         ori_loss = (self.hparams.w_ori * loss_ori_weighted) + \
                    (self.hparams.w_coh * loss_ori_coherence)
         
-        # 2. Loss de Enhancement (Inalterada)
-        enh_loss = (0.5 * self.mse_criterion(pred_orig, true_orig) + \
-                    0.5 * self.bce_criterion(pred_bin, true_bin))
-        
         # 3. Loss Total (Inalterada)
-        total_loss = ori_loss + enh_loss
+        total_loss = ori_loss 
         
-        return {"ori_loss": ori_loss, "enh_loss": enh_loss, "total_loss": total_loss}
+        return {"total_loss": ori_loss}
     
     def training_step(
         self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int
-    ) -> None: 
-        opt_dirmap, opt_enh = self.optimizers()
+    ) -> torch.Tensor:
+        """Perform a single training step on a batch of data from the training set.
 
-        losses = self.model_step(batch)
-        ori_loss = losses["ori_loss"]
-        enh_loss = losses["enh_loss"]
-        total_loss = losses["total_loss"]
+        :param batch: A batch of data (a tuple) containing the input tensor of images and target
+            labels.
+        :param batch_idx: The index of the current batch.
+        :return: A tensor of losses between model predictions and targets.
+        """
+        loss = self.model_step(batch)
 
-        # Fase 1: Aquecimento (otimiza apenas dirmap)
-        if self.current_epoch < self.hparams.warmup_epochs_dirmap:
-            opt_dirmap.zero_grad()
-            self.manual_backward(ori_loss)
-            opt_dirmap.step()
-            self.train_ori_loss(ori_loss)
-            self.log("train/ori_loss", self.train_ori_loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+        # update and log metrics
+        self.train_loss(loss)
+        self.log("train/loss", self.train_loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
 
-        # Fase 2: Treinamento conjunto (otimiza ambos)
-        else:
-            opt_dirmap.zero_grad()
-            opt_enh.zero_grad()
-            self.manual_backward(total_loss)
-            opt_dirmap.step()
-            opt_enh.step()
-
-            self.train_loss(total_loss)
-            self.train_ori_loss(ori_loss)
-            self.train_enh_loss(enh_loss)
-            self.log("train/loss", self.train_loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
-            self.log("train/ori_loss", self.train_ori_loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
-            self.log("train/enh_loss", self.train_enh_loss, on_step=False, on_epoch=True, sync_dist=True)
-        
+        # return loss or backpropagation will fail
+        return loss
+    
     def on_train_epoch_start(self):
-        if self.current_epoch < self.hparams.warmup_epochs_dirmap:
-            self.net.dirmap_net.requires_grad_(True); self.net.enhancer_net.requires_grad_(False)
-        elif self.current_epoch == self.hparams.warmup_epochs_dirmap:
-            print(f"\nÉpoca {self.current_epoch}: Fim do aquecimento. Treinando o modelo completo!\n")
-            self.net.dirmap_net.requires_grad_(True); self.net.enhancer_net.requires_grad_(True)
+        """
+        Hook executado no início de cada época de treinamento.
+        Ideal para congelar/descongelar camadas.
+        """
+        pass
 
-    def on_train_epoch_end(self) -> None: pass
+    def on_train_epoch_end(self) -> None:
+        "Lightning hook that is called when a training epoch ends."
+        pass
 
     def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
-        losses = self.model_step(batch)
-        self.val_loss(losses["total_loss"]); self.val_ori_loss(losses["ori_loss"]); self.val_enh_loss(losses["enh_loss"])
+        """Perform a single validation step on a batch of data from the validation set.
+
+        :param batch: A batch of data (a tuple) containing the input tensor of images and target
+            labels.
+        :param batch_idx: The index of the current batch.
+        """
+        loss = self.model_step(batch)
+
+        # update and log metrics
+        self.val_loss(loss)
         self.log("val/loss", self.val_loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("val/ori_loss", self.val_ori_loss, on_step=False, on_epoch=True, prog_bar=False)
-        self.log("val/enh_loss", self.val_enh_loss, on_step=False, on_epoch=True, prog_bar=False)
 
     def on_validation_epoch_end(self) -> None:
-        loss = self.val_loss.compute(); self.val_loss_best(loss)
+        "Lightning hook that is called when a validation epoch ends."
+        loss = self.val_loss.compute()  # get current val acc
+        self.val_loss_best(loss)  # update best so far val acc
+        # log `val_loss_best` as a value through `.compute()` method, instead of as a metric object
+        # otherwise metric would be reset by lightning after each epoch
         self.log("val/loss_best", self.val_loss_best.compute(), sync_dist=True, prog_bar=True)
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
-        losses = self.model_step(batch)
-        self.test_loss(losses["total_loss"])
-        self.log("test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        """Perform a single test step on a batch of data from the test set.
 
-    def on_test_epoch_end(self) -> None: pass
+        :param batch: A batch of data (a tuple) containing the input tensor of images and target
+            labels.
+        :param batch_idx: The index of the current batch.
+        """
+        loss, preds, targets = self.model_step(batch)
+
+        # update and log metrics
+        self.test_loss(loss)
+        # self.test_acc(preds, targets)
+        self.log(
+            "test/loss",
+            self.test_loss,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            sync_dist=True,
+        )
+        # self.log("test/acc", self.test_acc, on_step=False, on_epoch=True, prog_bar=True)
+
+    def on_test_epoch_end(self) -> None:
+        """Lightning hook that is called when a test epoch ends."""
+        pass
 
     def setup(self, stage: str) -> None:
-        if self.hparams.compile and stage == "fit": self.net = torch.compile(self.net)
+        """Lightning hook that is called at the beginning of fit (train + validate), validate,
+        test, or predict.
+
+        This is a good hook when you need to build models dynamically or adjust something about
+        them. This hook is called on every process when using DDP.
+
+        :param stage: Either `"fit"`, `"validate"`, `"test"`, or `"predict"`.
+        """
+        if self.hparams.compile and stage == "fit":
+            self.net = torch.compile(self.net)
 
     def configure_optimizers(self) -> Dict[str, Any]:
-        opt_dirmap = self.hparams.optimizer_dirmap(params=self.net.dirmap_net.parameters())
-        opt_enh = self.hparams.optimizer_enh(params=self.net.enhancer_net.parameters())
-        sched_dirmap_obj = self.hparams.scheduler_dirmap(optimizer=opt_dirmap)
-        sched_dirmap = { "scheduler": sched_dirmap_obj, "monitor": "val/ori_loss", "interval": "epoch", "frequency": 1, "name": "lr/dirmap" }
-        sched_enh_obj = self.hparams.scheduler_enh(optimizer=opt_enh)
-        sched_enh = { "scheduler": sched_enh_obj, "monitor": "val/loss", "interval": "epoch", "frequency": 1, "name": "lr/enhancer" }
-        return [opt_dirmap, opt_enh], [sched_dirmap, sched_enh]
+        """Choose what optimizers and learning-rate schedulers to use in your optimization.
+        Normally you'd need one. But in the case of GANs or similar you might have multiple.
 
-    # ... (Seu método predict_step permanece inalterado) ...
-    # <-------------------------------------------------------------------------------------->
+        Examples:
+            https://lightning.ai/docs/pytorch/latest/common/lightning_module.html#configure-optimizers
+
+        :return: A dict containing the configured optimizers and learning-rate schedulers to be used for training.
+        """
+        optimizer = self.hparams.optimizer(params=self.trainer.model.parameters())
+        if self.hparams.scheduler is not None:
+            scheduler = self.hparams.scheduler(optimizer=optimizer)
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {
+                    "scheduler": scheduler,
+                    "monitor": "val/loss",
+                    "interval": "epoch",
+                    "frequency": 1,
+                },
+            }
+        return {"optimizer": optimizer}
+
     def save_orientation_field(self, output_tensor: torch.Tensor, mask:np.ndarray, png_path: str, dir_path: str):
-        output = output_tensor.cpu().squeeze(0)
-        assert output.shape[0] == 90, "Output must have 90 channels"
-        max_indices = torch.argmax(output, dim=0).numpy()
-        angles = max_indices * 2
+        """
+        Save the orientation field from a 90-channel output tensor to a .png image and .dir text file.
+
+        Parameters
+        ----------
+        output_tensor : torch.Tensor
+            Tensor of shape [1, 90, H, W] with probabilities or responses per angle.
+        png_path : str
+            Path to save the .png image.
+        dir_path : str
+            Path to save the .dir text file.
+        """
+        # Ensure tensor is detached and on CPU
+        output = output_tensor.cpu().squeeze(0)  # -> [90, H, W]
+        assert output.shape[0] == 90, "Output must have 91 channels"
+
+        # Find channel with maximum response per pixel
+        max_indices = torch.argmax(output, dim=0).numpy()  # -> [H, W]
+
+        # Convert channel indices to angles (0°, 2°, ..., 178°)
+        angles = max_indices * 2  # [H, W] int
+
+        # Map 180° to -1 for background
         background = -np.ones_like(angles)
-        if mask is not None: angles = np.where(mask == 0, background, angles)
+
+        if mask != None:
+            angles = np.where(mask == 0, background, angles)
+
         H, W = angles.shape
+
+        # --- Save PNG using PIL ---
+        # Scale angles (0..178) → (0..255) for visualization
         img_array = (angles.astype(np.float32) * (255.0 / 178.0)).astype(np.uint8)
-        Image.fromarray(img_array, mode="L").save(png_path)
+        img = Image.fromarray(img_array, mode="L")
+        img.save(png_path)
+
+        # --- Save .dir file with multiple columns per line ---
         with open(dir_path, "w") as f:
-            f.write(f"{W} {H}\n")
-            for y in range(H): f.write(" ".join(str(angles[y, x]) for x in range(W)) + "\n")
+            f.write(f"{W} {H}\n")  # width and height
+            for y in range(H):
+                row_values = " ".join(str(angles[y, x]) for x in range(W))
+                f.write(row_values + "\n")
 
     def predict_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
-        data, names = batch[0], batch[1]
-        output_paths = { 
-            "gabor": os.path.join(self.output_path, "gabor"), 
-            "bin": os.path.join(self.output_path, "bin"), 
-            "enh": os.path.join(self.output_path, "enh"), 
-            "dirmap": os.path.join(self.output_path, "dirmap"), 
-            "dirmap_png": os.path.join(self.output_path, "dirmap_png"), 
-            "mask": os.path.join(self.output_path, "mask") 
-        }
-        for path in output_paths.values(): os.makedirs(path, exist_ok=True)
-        if not self.use_patches:
-            dirmap_pred, latent_enh = self.forward(data)
-        else: # Lógica de patches aqui...
-            pass
-        for i, name in enumerate(names):
-            gabor   = latent_enh[i, 1, :, :]
-            orig    = latent_enh[i, 0, :, :]
+        """Perform a single prediction step on a batch of data from the test set.
 
-            gabor   = torch.nn.functional.sigmoid(gabor)
-            bin   = torch.round(gabor)
+        :param batch: A batch of data (a tuple) containing the input tensor of images and target
+            labels.
+        :param batch_idx: The index of the current batch.
+        """
+        data  = batch[0]
+        names = batch[1]
+        x, y = batch
+
+        # print(data.shape) # (28,1,128,128)
+        # print(y) # tupla com todos os nomes das imagens do batch
+
+        gabor_path = os.path.join(self.output_path, "gabor")
+        if not os.path.exists(gabor_path):
+            os.makedirs(gabor_path)
+
+        bin_path = os.path.join(self.output_path, "bin")
+        if not os.path.exists(bin_path):
+            os.makedirs(bin_path)
+
+        enh_path = os.path.join(self.output_path, "enh")
+        if not os.path.exists(enh_path):
+            os.makedirs(enh_path)
+
+        dirmap_path = os.path.join(self.output_path, "dirmap")
+        if not os.path.exists(dirmap_path):
+            os.makedirs(dirmap_path)
+
+        dirmap_png_path = os.path.join(self.output_path, "dirmap_png")
+        if not os.path.exists(dirmap_png_path):
+            os.makedirs(dirmap_png_path)
+
+        seg_path = os.path.join(self.output_path, "mask")
+        if not os.path.exists(seg_path):
+            os.makedirs(seg_path)
+
+        
+        dirmap_pred, latent_enh = self.forward(x)
+ 
+
+        for i, name in enumerate(names):
+
+            gabor    = latent_enh[i, 0, :, :]
 
             gabor = gabor.cpu().numpy()
-            bin   = bin.cpu().numpy()
-            orig  = orig.cpu().numpy()
 
             gabor = (255 * (gabor - np.min(gabor))/(np.max(gabor) - np.min(gabor))).astype('uint8')
-            bin   = (255 * (bin - np.min(bin))/(np.max(bin) - np.min(bin))).astype('uint8')
-            orig   = (255 * (orig - np.min(orig))/(np.max(orig) - np.min(orig))).astype('uint8')
 
             gabor = Image.fromarray(gabor)
-            gabor.save(output_paths['gabor'] + '/' + name + '.png')
-
-            bin = Image.fromarray(bin)
-            bin.save(output_paths['bin'] + '/' + name + '.png')
-
-            orig = Image.fromarray(orig)
-            orig.save(output_paths['enh'] + '/' + name + '.png')
+            gabor.save(gabor_path + '/' + name + '.png')
+         
 
             dirmap   = dirmap_pred[i, :, :, :]
             dirmap   = torch.nn.functional.sigmoid(dirmap)
 
-            # mask    = seg_pred[i, 0, :, :]
-            # mask = torch.nn.functional.sigmoid(mask)
-            # mask = torch.round(mask)
-            # mask = mask.cpu().numpy()
+            
+            self.save_orientation_field(dirmap, None, f"{dirmap_png_path}/{name}.png", f"{dirmap_path}/{name}.dir")
 
-            self.save_orientation_field(dirmap, None, f"{output_paths['dirmap_png']}/{name}.png", f"{output_paths['dirmap']}/{name}.dir")
 
     # <-------------------------------------------------------------------------------------->

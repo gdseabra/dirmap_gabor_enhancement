@@ -72,16 +72,16 @@ class Up(nn.Module):
 class OutConv(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(OutConv, self).__init__()
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1)
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=2)
 
     def forward(self, x):
         x = self.conv(x)
-        # return F.interpolate(x, scale_factor=1/4, mode='bilinear')
+        return F.interpolate(x, scale_factor=1/4, mode='bilinear')
         return x
 
 
 class UNet(nn.Module):
-    def __init__(self, in_ch=1, out_ch=91, ndim=2, chs: tuple[int, ...] = (64, 128, 256, 512, 1024)):
+    def __init__(self, in_ch=1, out_ch=90, ndim=2, chs: tuple[int, ...] = (64, 128, 256, 512, 1024)):
         super(UNet, self).__init__()
         self.n_channels = in_ch
         self.n_classes = out_ch
@@ -129,7 +129,7 @@ class UNet(nn.Module):
 
 
 if __name__ == '__main__':
-    model         = UNet(in_ch=3)
+    model         = UNet(in_ch=1)
 
     device        = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model         = model.to(device)

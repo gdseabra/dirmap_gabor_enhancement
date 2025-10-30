@@ -493,8 +493,8 @@ class EnhancerLitModule(LightningModule):
             os.makedirs(seg_path)
 
         if not self.use_patches:
-            # dirmap_pred, latent_enh = self.forward(x)
-            latent_enh = self.forward(x)
+            dirmap_pred = self.forward(x)
+            # latent_enh = self.forward(x)
         else:
             shape_latent = data.shape
             ROW = shape_latent[2]
@@ -517,34 +517,34 @@ class EnhancerLitModule(LightningModule):
                     latent_enh[:,:,(row_ind-self.input_row):row_ind, (col_ind-self.input_col):col_ind] += patch_pred
 
         for i, name in enumerate(names):
-            gabor   = latent_enh[i, 1, :, :]
-            orig    = latent_enh[i, 0, :, :]
+            # gabor   = latent_enh[i, 1, :, :]
+            # orig    = latent_enh[i, 0, :, :]
 
-            gabor   = torch.nn.functional.sigmoid(gabor)
-            bin   = torch.round(gabor)
+            # gabor   = torch.nn.functional.sigmoid(gabor)
+            # bin   = torch.round(gabor)
 
-            gabor = gabor.cpu().numpy()
-            bin   = bin.cpu().numpy()
-            orig  = orig.cpu().numpy()
+            # gabor = gabor.cpu().numpy()
+            # bin   = bin.cpu().numpy()
+            # orig  = orig.cpu().numpy()
 
-            gabor = (255 * (gabor - np.min(gabor))/(np.max(gabor) - np.min(gabor))).astype('uint8')
-            bin   = (255 * (bin - np.min(bin))/(np.max(bin) - np.min(bin))).astype('uint8')
-            orig   = (255 * (orig - np.min(orig))/(np.max(orig) - np.min(orig))).astype('uint8')
+            # gabor = (255 * (gabor - np.min(gabor))/(np.max(gabor) - np.min(gabor))).astype('uint8')
+            # bin   = (255 * (bin - np.min(bin))/(np.max(bin) - np.min(bin))).astype('uint8')
+            # orig   = (255 * (orig - np.min(orig))/(np.max(orig) - np.min(orig))).astype('uint8')
 
-            gabor = Image.fromarray(gabor)
-            gabor.save(gabor_path + '/' + name + '.png')
+            # gabor = Image.fromarray(gabor)
+            # gabor.save(gabor_path + '/' + name + '.png')
 
-            bin = Image.fromarray(bin)
-            bin.save(bin_path + '/' + name + '.png')
+            # bin = Image.fromarray(bin)
+            # bin.save(bin_path + '/' + name + '.png')
 
-            orig = Image.fromarray(orig)
-            orig.save(enh_path + '/' + name + '.png')
+            # orig = Image.fromarray(orig)
+            # orig.save(enh_path + '/' + name + '.png')
 
-            # dirmap   = dirmap_pred[i, :, :, :]
-            # dirmap   = torch.nn.functional.sigmoid(dirmap)
+            dirmap   = dirmap_pred[i, :, :, :]
+            dirmap   = torch.nn.functional.sigmoid(dirmap)
 
             
-            # self.save_orientation_field(dirmap, None, f"{dirmap_png_path}/{name}.png", f"{dirmap_path}/{name}.dir")
+            self.save_orientation_field(dirmap, None, f"{dirmap_png_path}/{name}.png", f"{dirmap_path}/{name}.dir")
 
 
             # bin   = torch.nn.functional.sigmoid(gabor)
