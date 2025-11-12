@@ -74,9 +74,9 @@ class GaborConvLayer(nn.Module):
         # Apply the convolution
         return self.conv(x)
 
-class UNetGabor(nn.Module):
-    def __init__(self, in_ch=1, out_ch=90, ndim=2, chs: tuple[int, ...] = (64, 128, 256, 512, 1024)):
-        super(UNetGabor, self).__init__()
+class DirmapNet(nn.Module):
+    def __init__(self, in_ch=1, out_ch=90, ndim=2, chs: tuple[int, ...] = (32, 64, 128, 256, 512, 1024)):
+        super(DirmapNet, self).__init__()
         
         self.dirmap_net = UNet(in_ch=1, out_ch=90, ndim=ndim, chs=chs)
 
@@ -88,48 +88,51 @@ class UNetGabor(nn.Module):
         )
 
     def forward(self, x):
-    
         # --- Step 1: Get orientation map from U-Net ---
-        # out_dirmap shape: (B, C, H, W), where C is the number of orientations
+        # orientation_map shape: (B, 90, H, W)
         out_dirmap = self.dirmap_net(x)
 
-        # --- Create a hard mask from the orientation map ---
-        # Find the index of the maximum value for each pixel along the channel dimension.
-        # max_indices shape: (B, H, W)
-        max_indices = torch.argmax(out_dirmap, dim=1)
-        
-        # Create a one-hot encoded tensor from the indices. This produces a tensor
-        # of shape (B, H, W, C), where the last dimension is the one-hot vector.
-        hard_mask = F.one_hot(max_indices, num_classes=out_dirmap.shape[1])
-        
-        # Permute dimensions to (B, C, H, W) to match the gabor_responses shape
-        # and cast to float for multiplication.
-        hard_mask = hard_mask.permute(0, 3, 1, 2).float()
+        # Apply softmax to get probabilities for each orientation at each pixel
+        orientation_probs = torch.softmax(out_dirmap, dim=1)
 
-        hard_mask_upscaled = F.interpolate(hard_mask, scale_factor=8, mode="nearest")
+        # --- Step 2: Convert probabilities to one-hot binary output ---
+
+        # 1. Get the index of the max probability along dimension 1 (the channels)
+        # The shape of max_indices will be (B, 1, H, W)
+        max_indices = torch.argmax(orientation_probs, dim=1, keepdim=True)
+
+        # 2. Create a tensor of zeros with the same shape as orientation_probs
+        orientation_binary = torch.zeros_like(orientation_probs)
+
+        # 3. Use scatter_ to place a '1' at the index of the max probability
+        # This operation is in-place and very efficient
+        orientation_binary.scatter_(1, max_indices, 1.0)
+
+        orientation_binary = F.interpolate(orientation_binary, size=x.shape[2:], mode='nearest')
+
+        # 'orientation_binary' is now your desired (B, 90, H, W) tensor
+        # with a '1' in the channel of max probability and '0's otherwise.
 
         # --- Step 2: Get Gabor filter responses ---
-        # gabor_responses shape: (B, C, H, W)
+        # gabor_responses shape: (B, 90, H, W)
         gabor_responses = self.gabor_layer(x)
         
-        # --- Step 3: Weight Gabor responses by the hard mask ---
-        # Element-wise multiplication. For each pixel, only the Gabor response
-        # corresponding to the max orientation score will be kept. All others will be zero.
-        weighted_responses = hard_mask_upscaled * gabor_responses
+        # --- Step 3: Weight Gabor responses by orientation probabilities ---
+        # Element-wise multiplication
+        weighted_responses = orientation_binary * gabor_responses
         
-        # --- Step 4: Sum the weighted responses ---
-        # Summing across the channel dimension effectively selects the single non-zero
-        # Gabor response for each pixel, creating the final enhanced feature map.
-        # out_enh shape: (B, 1, H, W)
-        out_enh = torch.sum(weighted_responses, dim=1, keepdim=True)
-        
-        return out_dirmap, out_enh
+        # --- Step 4: Sum the weighted responses to get a single feature map ---
+        # Sum across the 90 channels
+        # combined_feature_map shape: (B, 1, H, W)
+        combined_feature_map = torch.sum(weighted_responses, dim=1, keepdim=True)
+
+        return out_dirmap, combined_feature_map
 
 
 
 
 if __name__ == '__main__':
-    model         =  UNetGabor()
+    model         =  DirmapNet()
 
     device        = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model         = model.to(device)

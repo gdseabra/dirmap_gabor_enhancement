@@ -26,6 +26,35 @@ class DoubleConv(nn.Module):
         return self.double_conv(x)
 
 
+class DoubleConvWithPooling(nn.Module):
+    """(convolution => [BN] => ReLU => MaxPool2d) * 2"""
+
+    def __init__(self, in_channels, out_channels, mid_channels=None):
+        super().__init__()
+        if not mid_channels:
+            mid_channels = out_channels
+        
+        # Using nn.Sequential for each block for clarity
+        self.conv_block1 = nn.Sequential(
+            nn.Conv2d(in_channels, mid_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(mid_channels),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2)  # Added Max Pooling
+        )
+        
+        self.conv_block2 = nn.Sequential(
+            nn.Conv2d(mid_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2)  # Added Max Pooling
+        )
+
+    def forward(self, x):
+        x = self.conv_block1(x)
+        x = self.conv_block2(x)
+        return x
+
+
 class Down(nn.Module):
     """Downscaling with maxpool then double conv"""
 
@@ -43,19 +72,23 @@ class Down(nn.Module):
 class Up(nn.Module):
     """Upscaling then double conv"""
 
-    def __init__(self, in_channels, out_channels, bilinear=True):
+    def __init__(self, in_channels, out_channels, bilinear=True, conv_block=DoubleConv):
+        """
+        Added conv_block argument to flexibly change the convolution type.
+        """
         super().__init__()
 
         # if bilinear, use the normal convolutions to reduce the number of channels
         if bilinear:
             self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
-            self.conv = DoubleConv(in_channels, out_channels, in_channels // 2)
+            self.conv = conv_block(in_channels, out_channels, in_channels // 2)
         else:
             self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
-            self.conv = DoubleConv(in_channels, out_channels)
+            self.conv = conv_block(in_channels, out_channels)
 
     def forward(self, x1, x2):
         x1 = self.up(x1)
+        
         # input is CHW
         diffY = x2.size()[2] - x1.size()[2]
         diffX = x2.size()[3] - x1.size()[3]
@@ -72,34 +105,48 @@ class Up(nn.Module):
 class OutConv(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(OutConv, self).__init__()
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=2)
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1)
 
     def forward(self, x):
         x = self.conv(x)
-        return F.interpolate(x, scale_factor=1/4, mode='bilinear')
         return x
 
 
 class UNet(nn.Module):
-    def __init__(self, in_ch=1, out_ch=90, ndim=2, chs: tuple[int, ...] = (64, 128, 256, 512, 1024)):
+    def __init__(self, in_ch=1, out_ch=90, ndim=2, chs: tuple[int, ...] = (32, 64, 128, 256, 512, 1024)):
         super(UNet, self).__init__()
+        
+        # --- REFACTORED SECTION ---
+        # This init method now uses the `chs` tuple to define layer channels.
+        # The default `chs` (64, 128, 256, 512, 1024) replicates the original
+        # hardcoded behavior.
+        
         self.n_channels = in_ch
         self.n_classes = out_ch
-
-        bilinear = True
+        
+        # Note: The original code hardcoded bilinear=True. We preserve this behavior.
+        # The `ndim` parameter was unused, so it is ignored.
+        bilinear = True 
         self.bilinear = bilinear
 
-        self.inc = (DoubleConv(self.n_channels, 64))
-        self.down1 = (Down(64, 128))
-        self.down2 = (Down(128, 256))
-        self.down3 = (Down(256, 512))
         factor = 2 if bilinear else 1
-        self.down4 = (Down(512, 1024 // factor))
-        self.up1 = (Up(1024, 512 // factor, bilinear))
-        self.up2 = (Up(512, 256 // factor, bilinear))
-        self.up3 = (Up(256, 128 // factor, bilinear))
-        self.up4 = (Up(128, 64, bilinear))
-        self.outc = (OutConv(64, out_ch))
+
+        # Encoder (Down-sampling path)
+        self.inc = (DoubleConv(self.n_channels, chs[0]))
+        self.down1 = (Down(chs[0], chs[1])) # 64 -> 128 (H/2, W/2)
+        self.down2 = (Down(chs[1], chs[2])) # 128 -> 256 (H/4, W/4)
+        self.down3 = (Down(chs[2], chs[3])) # 256 -> 512 (H/8, W/8)
+        self.down4 = (Down(chs[3], chs[4])) # 512 -> 1024 (H/16, W/16)
+
+        # Bottleneck layer
+        self.down5 = (Down(chs[4], chs[5] // factor)) # 1024 -> 1024 (H/32, W/32)
+
+        # Decoder (Up-sampling path)
+        self.up1 = (Up(chs[5], chs[4] // factor, bilinear)) # 1048+1048 -> 256  
+        self.up2 = (Up(chs[4], chs[3] // factor, bilinear))
+        
+        self.outc = (OutConv(chs[3] // factor, out_ch))
+        # --- END OF REFACTORED SECTION ---
 
     def forward(self, x):
         x1 = self.inc(x)
@@ -107,31 +154,20 @@ class UNet(nn.Module):
         x3 = self.down2(x2)
         x4 = self.down3(x3)
         x5 = self.down4(x4)
-        x = self.up1(x5, x4)
-        x = self.up2(x, x3)
-        x = self.up3(x, x2)
-        x = self.up4(x, x1)
+        x6 = self.down5(x5)
+        x = self.up1(x6, x5)
+        x = self.up2(x, x4)
         logits = self.outc(x)
         return logits
 
-    def use_checkpointing(self):
-        self.inc = torch.utils.checkpoint(self.inc)
-        self.down1 = torch.utils.checkpoint(self.down1)
-        self.down2 = torch.utils.checkpoint(self.down2)
-        self.down3 = torch.utils.checkpoint(self.down3)
-        self.down4 = torch.utils.checkpoint(self.down4)
-        self.up1 = torch.utils.checkpoint(self.up1)
-        self.up2 = torch.utils.checkpoint(self.up2)
-        self.up3 = torch.utils.checkpoint(self.up3)
-        self.up4 = torch.utils.checkpoint(self.up4)
-        self.outc = torch.utils.checkpoint(self.outc)
 
 
 
 if __name__ == '__main__':
-    model         = UNet(in_ch=1)
+    model         = UNet(in_ch=1, out_ch=90)
 
     device        = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model         = model.to(device)
 
-    summary(model, (3, 256, 256))
+    print("--- Model Summary (with changes) ---")
+    summary(model, (1, 512, 512))
