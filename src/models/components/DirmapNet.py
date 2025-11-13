@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchsummary import summary
 
-from models.components.UNet import UNet
+from models.components.UNet import RobustUNet
 
 import torch
 import torch.nn as nn
@@ -78,7 +78,7 @@ class DirmapNet(nn.Module):
     def __init__(self, in_ch=1, out_ch=90, ndim=2, chs: tuple[int, ...] = (32, 64, 128, 256, 512, 1024)):
         super(DirmapNet, self).__init__()
         
-        self.dirmap_net = UNet(in_ch=1, out_ch=90, ndim=ndim, chs=chs)
+        self.dirmap_net = RobustUNet(in_ch=1, out_ch=90, chs=chs)
 
         self.gabor_layer = GaborConvLayer(
             num_orientations=90, 
