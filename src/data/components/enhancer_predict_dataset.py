@@ -8,7 +8,7 @@ from torchvision.transforms import transforms
 
 
 class EnhancerPredictionDataset(Dataset):
-    def __init__(self, data_dir: str = "data/", data_list: str = None, transform=None, img_subdir = '/latents/'):
+    def __init__(self, data_dir: str = "data/", data_list: str = None, transform=None, img_subdir = '/latents/', mask_dir: str = None):
         self.data_dir        = data_dir
         self.transform       = transform
         self.data_list       = data_dir + data_list if data_list is not None else data_dir + "/data_list.txt"
@@ -21,11 +21,15 @@ class EnhancerPredictionDataset(Dataset):
         self.img_suffix   = "." + lines[0].split(".")[-1]
 
         self.img_subdir   = img_subdir
+        self.mask_dir    = mask_dir
 
 
 
     def __getitem__(self, ix):
-        img   = Image.open(self.data_dir + self.img_subdir   + self.data[ix])
+        try:
+            img   = Image.open(self.data_dir + self.img_subdir   + self.data[ix])
+        except:
+            img   = Image.open(self.data_dir + self.img_subdir   + self.data[ix] + ".png")
 
         # normalizing lat and ref to -1, 1
 

@@ -21,6 +21,7 @@ class EnhancerPredictionDataModule(L.LightningDataModule):
         img_subdir: str = "/latents/",
         data_list: str = None,
         batch_size: int = 64,
+        mask_dir: str = None,
         num_workers: int = 0,
         pin_memory: bool = False,
     ) -> None:
@@ -129,6 +130,7 @@ class EnhancerPredictionDataModule(L.LightningDataModule):
                                                   transform=self.transforms, 
                                                   data_list=self.hparams.data_list, 
                                                   img_subdir=self.hparams.img_subdir, 
+                                                  mask_dir=self.hparams.mask_dir
                                                   )
 
 
