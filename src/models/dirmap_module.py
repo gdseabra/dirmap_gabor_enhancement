@@ -146,6 +146,7 @@ class DirmapLitModule(LightningModule):
         patch_size: Tuple[int, int] = (128, 128),
         use_patches: bool = False,
         stride: int = 8,
+        mask_dir: str = None,
         # --- NOVOS Hiperparâmetros para a Loss ---
         w_ori: float = 1.0,         # Peso para a loss de orientação ponderada
         w_coh: float = 0.5,         # Peso para a loss de coerência
@@ -183,6 +184,7 @@ class DirmapLitModule(LightningModule):
         self.use_patches = use_patches
         self.stride = stride
         self.output_path = output_path
+        self.mask_dir = mask_dir  # Diretório de máscaras, se necessário
 
 
     def forward(self, x: torch.Tensor) -> torch.Tensor: return self.net(x)
@@ -391,6 +393,14 @@ class DirmapLitModule(LightningModule):
         for i, name in enumerate(names):
             name = name.split('/')[-1].split('.')[0]
             gabor = dirmap_gabor[i, 0, :, :].cpu().numpy()
+            
+            if self.mask_dir is not None:
+                mask_path = os.path.join(self.mask_dir, name + '.png')
+                mask_img = Image.open(mask_path).convert('L')
+                mask = np.array(mask_img) / 255.0
+                gabor = gabor * mask
+
+            gabor = (255 * (gabor - np.min(gabor))/(np.max(gabor) - np.min(gabor))).astype('uint8')
             gabor = Image.fromarray(gabor)
             gabor.save(output_paths['gabor'] + '/' + name + '.png')
 
